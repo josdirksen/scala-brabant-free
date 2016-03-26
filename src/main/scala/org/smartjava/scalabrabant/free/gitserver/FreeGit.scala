@@ -1,14 +1,22 @@
 package org.smartjava.scalabrabant.free.gitserver
 
+import net.caoticode.buhtig.Buhtig
+import net.caoticode.buhtig.Converters.JSON
+import net.caoticode.buhtig.Converters._
+import org.json4s.DefaultFormats
 import org.slf4j.LoggerFactory
 import org.smartjava.scalabrabant.free.gitserver.GitServiceApp.GitServiceOp
 
-import scala.concurrent.Future
+import scala.concurrent.{Await, Future}
 import scala.language.higherKinds
 
+import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext.Implicits.global
 import scalaz._
 import Scalaz._
+
+import org.json4s.JsonDSL._
+import org.json4s.DefaultFormats._
 
 
 object domain {
@@ -48,6 +56,8 @@ object AST {
   */
 object GitServiceApp extends App {
 
+  val Log = LoggerFactory.getLogger(GitServiceApp.getClass)
+
   import domain._
   import AST._
 
@@ -71,8 +81,8 @@ object GitServiceApp extends App {
   }
 
   // Run with the sample interpreter, returns Id monad
-  interpreters.runInFuture(findRepositories("repo1"))
-  interpreters.runInFuture(getRepoAndProfile("repo1"))
+  val res = interpreters.runInFuture(getRepoAndProfile("repo1"))
+  Log.info(Await.result(res, 5 seconds).toString)
 }
 
 /**
@@ -87,22 +97,38 @@ object interpreters {
 
   def runInFuture[A](program: GitServiceOp[A]): Future[A] = {
     Log.info("Running in Future Interpreter")
-    val result = program.foldMap(FutureInterpret)
+    val result = program.foldMap(new GitHubInterpret(Config.token, Config.user))
     Log.info("Done Running in Future Interpreter")
     result
   }
 
-  object FutureInterpret extends (GitService ~> Future) {
 
-    override def apply[A](fa: GitService[A]): Future[A] = {
-      Log.info(s"Running step: $fa")
+  class GitHubInterpret(githubToken: String, user: String) extends (GitService ~> Future) {
 
-      fa match {
-        case GetProfile() => Future {Profile("", "", "")}
-        case GetProjects() => Future { List.empty[Project]}
-        case GetRepositories(project) => Future { List.empty[Repository] }
-        case GetProject(projectName) => Future{ Project("", "") }
+    implicit val formats = DefaultFormats
+
+    val buhtig = new Buhtig(githubToken)
+    val client = buhtig.asyncClient
+
+    override def apply[A](fa: GitService[A]): Future[A] = fa match {
+      case GetProfile() =>
+        client.users(user).get[JSON].map { res => Profile(
+          (res \ "login").extract[String],
+          (res \ "name").extract[String],
+          (res \ "email").extract[String])
+        }
+
+      case GetProjects() => Future { List.empty[Project] } // not implemented
+
+      case GetRepositories(project) =>
+        client.users(user).repos.get[JSON].map { repos => {
+          repos.extract[List[JSON]].map { repo =>
+            Repository((repo \ "name").extract[String],(repo \ "svn_url").extract[String] )
+          }
+        }
       }
+
+      case GetProject(projectName) => Future { Project("", "") } // not implemented
     }
   }
 }
