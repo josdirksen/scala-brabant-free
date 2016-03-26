@@ -2,11 +2,14 @@ package org.smartjava.scalabrabant.free.gitserver
 
 import org.slf4j.LoggerFactory
 import org.smartjava.scalabrabant.free.gitserver.GitServiceApp.GitServiceOp
-import org.smartjava.scalabrabant.free.gitserver.interpreters.NoOpInterpreter
 
 import scala.concurrent.Future
 import scala.language.higherKinds
-import scalaz.{Free, Id, ~>, _}
+
+import scala.concurrent.ExecutionContext.Implicits.global
+import scalaz._
+import Scalaz._
+
 
 object domain {
   // simple domain model, which described the entities in our domain.
@@ -68,8 +71,8 @@ object GitServiceApp extends App {
   }
 
   // Run with the sample interpreter, returns Id monad
-  interpreters.runInNoIp(findRepositories("repo1"))
-  interpreters.runInNoIp(getRepoAndProfile("repo1"))
+  interpreters.runInFuture(findRepositories("repo1"))
+  interpreters.runInFuture(getRepoAndProfile("repo1"))
 }
 
 /**
@@ -82,24 +85,24 @@ object interpreters {
   import domain._
   import AST._
 
-  def runInNoIp[A](program: GitServiceOp[A]): A = {
-    Log.info("We can do something before the program is run")
-    val result = program.foldMap(NoOpInterpreter)
-    Log.info("We can do something after the program is run")
+  def runInFuture[A](program: GitServiceOp[A]): Future[A] = {
+    Log.info("Running in Future Interpreter")
+    val result = program.foldMap(FutureInterpret)
+    Log.info("Done Running in Future Interpreter")
     result
   }
 
+  object FutureInterpret extends (GitService ~> Future) {
 
-  // an interpreter is a natural transformation from the Gitservice[A] to
-  // a specific Monad. This interpreter does nothing special, so just uses the
-  // Id monad.
-  object NoOpInterpreter extends (GitService ~> Id.Id) {
+    override def apply[A](fa: GitService[A]): Future[A] = {
+      Log.info(s"Running step: $fa")
 
-    override def apply[A](fa: GitService[A]): Id.Id[A] = fa match {
-      case GetProfile() => println("GetProfile called") ; Profile("", "", "")
-      case GetProjects() => println("GetProjects called") ; List.empty[Project]
-      case GetRepositories(project) => println("GetRepositores called") ; List.empty[Repository]
-      case GetProject(projectName) => println("GetProjects called") ; Project("", "")
+      fa match {
+        case GetProfile() => Future {Profile("", "", "")}
+        case GetProjects() => Future { List.empty[Project]}
+        case GetRepositories(project) => Future { List.empty[Repository] }
+        case GetProject(projectName) => Future{ Project("", "") }
+      }
     }
   }
 }
