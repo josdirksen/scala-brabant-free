@@ -56,9 +56,19 @@ object GitServiceApp extends App {
     } yield repositories
   }
 
+  // we can also combine various programs
+  def getRepoAndProfile(projectName: String) = {
+    for {
+      repositories <- findRepositories(projectName)
+      projects <- getProfile()
+    } yield (repositories, projects)
+  }
+
   // Run with the sample interpreter, returns Id monad
   val uninterpreted = findRepositories("repo1")
   val response = uninterpreted.foldMap(NoOpInterpreter)
+
+  println(getRepoAndProfile("repo1").foldMap(NoOpInterpreter))
 }
 
 /**
