@@ -1,7 +1,10 @@
 package org.smartjava.scalabrabant.free.gitserver
 
+import org.slf4j.LoggerFactory
+import org.smartjava.scalabrabant.free.gitserver.GitServiceApp.GitServiceOp
 import org.smartjava.scalabrabant.free.gitserver.interpreters.NoOpInterpreter
 
+import scala.concurrent.Future
 import scala.language.higherKinds
 import scalaz.{Free, Id, ~>, _}
 
@@ -65,10 +68,8 @@ object GitServiceApp extends App {
   }
 
   // Run with the sample interpreter, returns Id monad
-  val uninterpreted = findRepositories("repo1")
-  val response = uninterpreted.foldMap(NoOpInterpreter)
-
-  println(getRepoAndProfile("repo1").foldMap(NoOpInterpreter))
+  interpreters.runInNoIp(findRepositories("repo1"))
+  interpreters.runInNoIp(getRepoAndProfile("repo1"))
 }
 
 /**
@@ -76,8 +77,18 @@ object GitServiceApp extends App {
   */
 object interpreters {
 
+  val Log = LoggerFactory.getLogger(interpreters.getClass)
+
   import domain._
   import AST._
+
+  def runInNoIp[A](program: GitServiceOp[A]): A = {
+    Log.info("We can do something before the program is run")
+    val result = program.foldMap(NoOpInterpreter)
+    Log.info("We can do something after the program is run")
+    result
+  }
+
 
   // an interpreter is a natural transformation from the Gitservice[A] to
   // a specific Monad. This interpreter does nothing special, so just uses the
