@@ -1,15 +1,25 @@
 package org.smartjava.scalabrabant.free.gitserver
 
+import java.util.Date
+
+import net.caoticode.buhtig.Buhtig
+import net.caoticode.buhtig.Converters.JSON
+import net.caoticode.buhtig.Converters._
+import org.json4s.DefaultFormats
 import org.slf4j.LoggerFactory
-import org.smartjava.scalabrabant.free.gitserver.interpreters.FutureInterpret
+import org.smartjava.scalabrabant.free.gitserver.GitServiceApp.GitServiceOp
+import org.smartjava.scalabrabant.free.gitserver.interpreters.MetricsInterpreter
 
 import scala.concurrent.{Await, Future}
 import scala.language.higherKinds
 
+import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext.Implicits.global
-import scala.util.Try
 import scalaz._
 import Scalaz._
+
+import org.json4s.JsonDSL._
+import org.json4s.DefaultFormats._
 
 
 object domain {
@@ -17,18 +27,6 @@ object domain {
   case class Profile(username: String, fullName: String, email: String)
   case class Project(name: String, description: String)
   case class Repository(name: String, location: String)
-
-  // additional domain, for handling database actions
-  case class Transaction()
-  case class Result()
-
-  // the actions that can be executed, easily extendable by others
-  trait DBAction[A]
-  case class StartTransaction() extends DBAction[Transaction]
-  case class StopTransaction(trans: Transaction) extends DBAction[Unit]
-  case class Rollback() extends DBAction[Unit]
-  case class Commit() extends DBAction[Unit]
-  case class ExecuteQuery(query: String) extends DBAction[Try[List[Result]]]
 }
 
 object AST {
@@ -53,12 +51,12 @@ object AST {
   def getProjects() = Free.liftF(GetProjects())
   def getRepositories(project: Project) = Free.liftF(GetRepositories(project))
 
-  // the AST is very basic for this one, we just specify an execute method
-  sealed trait DBService[A]
-  case class Execute[A](action: DBAction[A]) extends DBService[A]
+  sealed trait Metrics[A]
+  case class Start() extends Metrics[Unit]
+  case class End() extends Metrics[Unit]
 
-  // and the function to lift actions
-  def execute[A](action: DBAction[A]) = Free.liftF(Execute(action))
+  def start() = Free.liftF(Start())
+  def end() = Free.liftF(End())
 }
 
 /**
@@ -92,18 +90,15 @@ object GitServiceApp extends App {
     } yield (repositories, projects)
   }
 
-  // now define a program for our database
-  val aQueryProgram = for {
-    transaction <- execute(StartTransaction())
-    updateResult <- execute(ExecuteQuery("UPDATE * FROM users"))
-    selectResult <- execute(ExecuteQuery("SELECT * FROM users"))
-    _ <- if (selectResult.isSuccess && updateResult.isSuccess) execute(Commit())
-        else execute(Rollback())
-    _ <- execute(StopTransaction(transaction))
-  } yield selectResult
+  def singleLogProgram = {
+    for {
+      _ <- start()
+      _ <- end()
+    } yield ()
+  }
 
-
-  val result = aQueryProgram.foldMap(FutureInterpret)
+  // Run with the sample interpreter, returns Id monad
+  singleLogProgram.foldMap(MetricsInterpreter)
 }
 
 /**
@@ -116,20 +111,47 @@ object interpreters {
   import domain._
   import AST._
 
-  object FutureInterpret extends (DBService ~> Future) {
+  def runInFuture[A](program: GitServiceOp[A]): Future[A] = {
+    Log.info("Running in Future Interpreter")
+    val result = program.foldMap(new GitHubInterpret(Config.token, Config.user))
+    Log.info("Done Running in Future Interpreter")
+    result
+  }
 
-    override def apply[A](fa: DBService[A]): Future[A] = {
-      Log.info(s"Running step: $fa")
+  object MetricsInterpreter extends (Metrics ~> Future) {
 
-      fa match {
-        case Execute(action) => action match {
-          case StartTransaction() => Log.info("Starting transaction")       ; Future(Transaction())
-          case StopTransaction(trans) => Log.info("Stop transaction")       ; Future()
-          case Commit() => Log.info("Commit transaction")                   ; Future()
-          case Rollback() => Log.info("Rollback transaction")               ; Future()
-          case ExecuteQuery(query) => Log.info(s"Execture query: $query")   ; Future(Try(List.empty))
+    override def apply[A](fa: Metrics[A]): Future[A] = fa match {
+      case Start() => Log.info("Program started at: " + new Date()) ; Future()
+      case End() => Log.info("Program ended at:" + new Date()) ; Future()
+    }
+  }
+
+  class GitHubInterpret(githubToken: String, user: String) extends (GitService ~> Future) {
+
+    implicit val formats = DefaultFormats
+
+    val buhtig = new Buhtig(githubToken)
+    val client = buhtig.asyncClient
+
+    override def apply[A](fa: GitService[A]): Future[A] = fa match {
+      case GetProfile() =>
+        client.users(user).get[JSON].map { res => Profile(
+          (res \ "login").extract[String],
+          (res \ "name").extract[String],
+          (res \ "email").extract[String])
         }
-      }
+
+      case GetProjects() => Future { List.empty[Project] } // not implemented
+
+      case GetRepositories(project) =>
+        client.users(user).repos.get[JSON].map { repos => {
+          repos.extract[List[JSON]].map { repo =>
+            Repository((repo \ "name").extract[String],(repo \ "svn_url").extract[String] )
+          }
+        }
+        }
+
+      case GetProject(projectName) => Future { Project("", "") } // not implemented
     }
   }
 }
