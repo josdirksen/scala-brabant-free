@@ -8,8 +8,18 @@ object SimpleTypeClass extends App {
   }
 
   // provide implementations for the interface
-  implicit object MyObjectCanSayWhatAmI extends CanSayWhatAmI[String] {
+  implicit object CanSayWhatString extends CanSayWhatAmI[String] {
     def whatAmI(x: String) = s"I'm a String, with value: $x"
+  }
+
+  implicit object CanSayWhatLong extends CanSayWhatAmI[Long] {
+    def whatAmI(x: Long) = s"I'm a Long, with value: $x"
+  }
+
+  // Define an implicit conversion to make it seem like the
+  // function is defined on the object
+  implicit class CanFooOps[A:CanSayWhatAmI](x: A) {
+    def whatAmI = implicitly[CanSayWhatAmI[A]].whatAmI(x)
   }
 
   // require the evidence, either with a context bound
@@ -22,6 +32,8 @@ object SimpleTypeClass extends App {
     println(ev.whatAmI(x))
   }
 
-  functionWhatAreYou("hello")
-  functionWhatAreYou2("hello")
+  println("Hello".whatAmI)
+  println(10L.whatAmI)
+
+
 }
